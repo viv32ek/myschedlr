@@ -14,7 +14,7 @@ const mockUser = {
   name: 'Alice',
   role: 'user',
   tenantId: 'testco',
-  passwordHash: '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', // "password1"
+  passwordHash: '$2a$10$WSkYZA9hjeB.lrCEQawQguJkl6kv.gL7d279hSX9toZrvc1qTbj5q', // "password1"
   createdAt: '2024-01-01T00:00:00.000Z',
 };
 

@@ -1,36 +1,40 @@
 const { GetCommand, PutCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const { docClient } = require('../db/dynamodb');
 
-const TABLE = process.env.DYNAMODB_USERS_TABLE || 'myschedlr-users';
-
 /**
- * DynamoDB key design:
- *   pk  = USER#<email>   (partition key — enables look-up by email)
- *   sk  = #METADATA
- *   id  = uuid           (stored as attribute; used in JWT sub)
+ * Table-per-tenant silo model.
+ * Each tenant's data lives in its own DynamoDB table — zero cross-tenant data access.
+ *
+ * Table name pattern: myschedlr-{tenantId}-users
+ *
+ * Key design:
+ *   pk  = USER#<email>   (partition key — look-up by email)
+ *   sk  = #METADATA      (sort key)
+ *   id  = uuid           (stored attribute — used in JWT sub / id-index)
  */
+const tableName = (tenantId) => `myschedlr-${tenantId}-users`;
 
 const userKey = (email) => ({ pk: `USER#${email}`, sk: '#METADATA' });
 
-const createUser = async ({ id, email, name, role, passwordHash, createdAt }) => {
+const createUser = async (tenantId, { id, email, name, role, passwordHash, createdAt }) => {
   await docClient.send(new PutCommand({
-    TableName: TABLE,
-    Item: { ...userKey(email), id, email, name, role, passwordHash, createdAt },
+    TableName: tableName(tenantId),
+    Item: { ...userKey(email), id, email, name, role, passwordHash, createdAt, tenantId },
     ConditionExpression: 'attribute_not_exists(pk)',
   }));
 };
 
-const getUserByEmail = async (email) => {
+const getUserByEmail = async (tenantId, email) => {
   const { Item } = await docClient.send(new GetCommand({
-    TableName: TABLE,
+    TableName: tableName(tenantId),
     Key: userKey(email),
   }));
   return Item ?? null;
 };
 
-const getUserById = async (id) => {
+const getUserById = async (tenantId, id) => {
   const { Items } = await docClient.send(new QueryCommand({
-    TableName: TABLE,
+    TableName: tableName(tenantId),
     IndexName: 'id-index',
     KeyConditionExpression: 'id = :id',
     ExpressionAttributeValues: { ':id': id },
@@ -39,4 +43,5 @@ const getUserById = async (id) => {
   return Items?.[0] ?? null;
 };
 
-module.exports = { createUser, getUserByEmail, getUserById };
+module.exports = { createUser, getUserByEmail, getUserById, tableName };
+

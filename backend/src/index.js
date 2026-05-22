@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 
+const tenantMiddleware = require('./middleware/tenant');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 
@@ -11,6 +12,9 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+// All routes below require a resolved tenantId
+app.use(tenantMiddleware);
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);
 

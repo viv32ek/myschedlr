@@ -5,26 +5,29 @@
 ## Architecture
 
 ```
-               ┌─────────────┐
-               │  CloudFront  │
-               └──────┬──────┘
-                      │ HTTPS
-               ┌──────▼──────┐
-               │   S3 Bucket  │  (React UI static assets)
-               └─────────────┘
+  acme.myschedlr.com          betacorp.myschedlr.com
+        │                              │
+  ┌─────▼──────────────────────────────▼─────┐
+  │           ALB  (shared)                   │
+  │  host: acme.*  ──►  ECS Service (acme)    │
+  │  host: betacorp.* ─► ECS Service (betacorp)│
+  └──────────────────────────────────────────-┘
+         │                         │
+  ┌──────▼──────┐           ┌──────▼──────┐
+  │  DynamoDB   │           │  DynamoDB   │
+  │ acme-users  │           │betacorp-users│  ← complete data silo
+  └─────────────┘           └─────────────┘
 
-  Mobile (Flutter) ──┐
-                     │ HTTPS
-               ┌─────▼──────┐
-               │     ALB     │
-               └──────┬──────┘
-               ┌──────▼──────┐
-               │  ECS Fargate │  (Express API, 2+ tasks)
-               └──────┬──────┘
-               ┌──────▼──────┐
-               │   DynamoDB  │
-               └─────────────┘
+  CloudFront (acme)        CloudFront (betacorp)
+       │                          │
+  S3 acme-ui               S3 betacorp-ui       ← separate UI per tenant
 ```
+
+**Multi-tenancy model: table-per-tenant silo**
+- Each tenant's data is in its own DynamoDB table — zero cross-tenant data access
+- Same Docker image runs in separate ECS services per tenant
+- JWT `tid` claim is validated against the active tenant to prevent token cross-use
+- Adding a tenant = one entry in `infra/tenants.json` + `cdk deploy`
 
 ## Structure
 ```
@@ -38,11 +41,11 @@ myschedlr/
 ├── ui/                    ← React + Vite → S3 + CloudFront
 ├── mobile/                ← Flutter
 ├── infra/                 ← AWS CDK (TypeScript)
-│   ├── bin/app.ts         ← CDK app entry
+│   ├── tenants.json       ← add/remove tenants here
+│   ├── bin/app.ts         ← CDK app entry (loops over tenants)
 │   └── lib/
-│       ├── database-stack.ts   ← DynamoDB
-│       ├── backend-stack.ts    ← ECS Fargate + ALB + ECR
-│       └── ui-stack.ts         ← S3 + CloudFront
+│       ├── shared-stack.ts     ← VPC, ECS Cluster, ECR, ALB (shared)
+│       └── tenant-stack.ts     ← DynamoDB + ECS Service + S3/CloudFront (per tenant)
 └── docker-compose.yml     ← local dev (includes DynamoDB Local)
 ```
 
@@ -89,15 +92,21 @@ npx cdk bootstrap    # once per AWS account/region
 
 ### Deploy all stacks
 ```bash
-# 1. Build UI
-cd ui && npm run build
+# 1. Build UI (repeat per tenant with appropriate VITE_TENANT_ID)
+cd ui && VITE_TENANT_ID=acme npm run build
 
-# 2. Build & push backend Docker image to ECR (first deploy: create ECR repo first)
-cd infra && npx cdk deploy MyschedlrDatabase MyschedlrBackend
+# 2. Deploy shared infra first
+cd infra && npx cdk deploy MyschedlrShared
 
-# 3. Deploy UI to S3 + CloudFront
-npx cdk deploy MyschedlrUi
+# 3. Deploy each tenant (or --all to deploy everything)
+npx cdk deploy MyschedlrTenant-acme MyschedlrTenant-betacorp
+# or: npx cdk deploy --all
 ```
+
+### Adding a new tenant
+1. Add an entry to `infra/tenants.json`
+2. Run `cd infra && npx cdk deploy MyschedlrTenant-<newid>`
+3. Build + deploy the UI with `VITE_TENANT_ID=<newid>`
 
 ### GitHub Actions CD (automatic on push to main)
 Add these secrets to the repo:

@@ -1,6 +1,5 @@
 process.env.JWT_SECRET = 'test_secret';
-process.env.DYNAMODB_ENDPOINT = 'http://localhost:8000';
-process.env.DYNAMODB_USERS_TABLE = 'myschedlr-users-test';
+process.env.TENANT_ID = 'testco';   // locks tenant middleware to a fixed value in tests
 
 // Mock the user model so tests don't need a real DynamoDB
 jest.mock('../src/models/user');
@@ -14,6 +13,7 @@ const mockUser = {
   email: 'a@test.com',
   name: 'Alice',
   role: 'user',
+  tenantId: 'testco',
   passwordHash: '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', // "password1"
   createdAt: '2024-01-01T00:00:00.000Z',
 };
@@ -26,6 +26,7 @@ describe('Auth routes', () => {
     const res = await request(app).post('/auth/signup').send({ email: 'b@test.com', password: 'password1', name: 'Bob' });
     expect(res.status).toBe(201);
     expect(res.body.accessToken).toBeDefined();
+    expect(userModel.createUser).toHaveBeenCalledWith('testco', expect.objectContaining({ email: 'b@test.com' }));
   });
 
   it('POST /auth/signup duplicate email → 409', async () => {

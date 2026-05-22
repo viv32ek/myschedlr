@@ -1,9 +1,9 @@
-const { users } = require('./authController');
+const { getUserById } = require('../models/user');
 
-const getMe = (req, res) => {
-  const user = users.find(u => u.id === req.userId);
+const getMe = async (req, res) => {
+  const user = await getUserById(req.userId);
   if (!user) return res.status(404).json({ message: 'User not found' });
-  const { passwordHash, ...safe } = user;
+  const { passwordHash, pk, sk, ...safe } = user;
   return res.json(safe);
 };
 

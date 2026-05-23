@@ -2,13 +2,13 @@
   {
     "id": "acme",
     "subdomain": "acme",
-    "region": "us-east-1",
+    "region": "ap-south-1",
     "contact": "admin@acme.example.com"
   },
   {
     "id": "betacorp",
     "subdomain": "betacorp",
-    "region": "us-east-1",
+    "region": "ap-south-1",
     "contact": "admin@betacorp.example.com"
   }
 ]

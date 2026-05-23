@@ -35,9 +35,14 @@ components:
     User:
       type: object
       properties:
-        id:        { type: string, description: "Cognito sub — also stored as usr_* in DynamoDB" }
-        email:     { type: string, format: email }
-        name:      { type: string }
+        id:
+          type: string
+          description: Cognito sub — stable unique identifier
+        email:
+          type: string
+          format: email
+        name:
+          type: string
         roles:
           type: array
           items:
@@ -45,7 +50,61 @@ components:
             enum: [admin, faculty, student]
           minItems: 1
           description: A user may hold multiple roles simultaneously
-        createdAt: { type: string, format: date-time }
+        adminType:
+          type: string
+          nullable: true
+          enum: [super_admin, tenancy_admin, null]
+          description: |
+            Elevated admin tier. Absent/null for non-elevated users.
+            super_admin: full tenant powers.
+            tenancy_admin: access to tenancy config modules listed in tenancyAccess.
+        tenancyAccess:
+          type: array
+          items:
+            type: string
+            enum: [core, billing]
+          description: Present only when adminType is tenancy_admin. Controls which modules the admin can configure.
+        tenantId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AdminGrant:
+      type: object
+      description: |
+        A delegated scope access grant. RO (read everything in the scope) is always
+        the baseline. The permissions array lists explicitly granted write capabilities.
+      properties:
+        granteeEmail:
+          type: string
+          format: email
+        scope:
+          type: string
+          enum: [course, school, batch]
+        scopeId:
+          type: string
+          description: ID of the course, school, or batch
+        permissions:
+          type: array
+          items:
+            type: string
+            enum:
+              [edit_course, edit_school, edit_batch, manage_batches, manage_schedules]
+          description: |
+            Empty array = RO only.
+            course scope allows: edit_course, manage_batches, manage_schedules
+            school scope allows: edit_school, manage_batches, manage_schedules
+            batch scope allows:  edit_batch, manage_schedules
+        grantedBy:
+          type: string
+          description: Cognito sub of the admin who created this grant
+        grantedAt:
+          type: string
+          format: date-time
 
     Error:
       type: object
@@ -75,23 +134,22 @@ paths:
     post:
       summary: Create DynamoDB profile after first Cognito login
       description: |
-        Called by the client immediately after a user's first successful
-        Cognito authentication. Creates the user's profile record in DynamoDB
-        (name, roles, tenantId). Idempotent — safe to call on every login;
-        does nothing if the profile already exists.
+        Called by the client immediately after a user's first successful Cognito
+        authentication. Creates the user's profile in DynamoDB. Idempotent — returns
+        200 with the existing profile if it already exists.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [name]
+              required: [name, email]
               properties:
                 name:  { type: string }
+                email: { type: string, format: email }
                 roles:
                   type: array
                   items: { type: string, enum: [admin, faculty, student] }
-                  minItems: 1
                   default: [student]
       responses:
         "201":
@@ -104,15 +162,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Missing required fields or invalid roles
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401":
           description: Unauthorized
 
   /users/me:
     get:
       summary: Get current user profile
-      description: |
-        Returns the DynamoDB profile for the authenticated Cognito user.
-        A minimal profile is created automatically on first call (lazy provisioning).
       responses:
         "200":
           description: Current user
@@ -120,7 +180,205 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
         "401":
-          description: Missing or invalid Cognito access token
+          description: Missing or invalid token
+        "404":
+          description: Profile not found — call POST /auth/provision first
+
+    patch:
+      summary: Update own display name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200":
+          description: Updated profile
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Missing name
+        "401":
+          description: Unauthorized
+        "404":
+          description: Profile not found
+
+  /users:
+    get:
+      summary: List all users
+      description: Requires super_admin or tenancy_admin.
+      responses:
+        "200":
+          description: Array of user profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+        description: Cognito sub of the target user
+
+    get:
+      summary: Get user by ID
+      description: Accessible to the user themselves or any elevated admin.
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "403":
+          description: Forbidden
+        "404":
+          description: User not found
+
+    patch:
+      summary: Update user profile
+      description: |
+        Field-level authorization:
+        - name: self, super_admin, or tenancy core admin
+        - roles: super_admin or tenancy core admin
+        - adminType: super_admin only
+        - tenancyAccess: super_admin only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                roles:
+                  type: array
+                  items: { type: string, enum: [admin, faculty, student] }
+                adminType:
+                  type: string
+                  nullable: true
+                  enum: [super_admin, tenancy_admin, null]
+                tenancyAccess:
+                  type: array
+                  items: { type: string, enum: [core, billing] }
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Invalid fields
+        "403":
+          description: Forbidden
+        "404":
+          description: User not found
+
+    delete:
+      summary: Delete user and all their grants
+      description: Requires super_admin. Cannot delete your own account.
+      responses:
+        "204":
+          description: Deleted
+        "400":
+          description: Cannot delete own account
+        "403":
+          description: Forbidden
+        "404":
+          description: User not found
+
+  /users/{userId}/grants:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+        description: Cognito sub of the target user
+
+    get:
+      summary: List delegated scope grants for a user
+      description: Accessible to the user themselves or any elevated admin.
+      responses:
+        "200":
+          description: Array of grants
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AdminGrant" }
+        "403":
+          description: Forbidden
+        "404":
+          description: User not found
+
+  /users/{userId}/grants/{scope}/{scopeId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+      - name: scope
+        in: path
+        required: true
+        schema: { type: string, enum: [course, school, batch] }
+      - name: scopeId
+        in: path
+        required: true
+        schema: { type: string }
+        description: ID of the course, school, or batch
+
+    put:
+      summary: Create or update a delegated scope grant
+      description: |
+        Requires super_admin or tenancy core admin. RO is always included;
+        the permissions array specifies additional write capabilities.
+        Empty permissions array = RO only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                permissions:
+                  type: array
+                  items:
+                    type: string
+                    enum: [edit_course, edit_school, edit_batch, manage_batches, manage_schedules]
+                  default: []
+      responses:
+        "200":
+          description: Grant created or updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminGrant" }
+        "400":
+          description: Invalid scope or permissions
+        "403":
+          description: Forbidden
+        "404":
+          description: User not found
+
+    delete:
+      summary: Revoke a delegated scope grant
+      description: Requires super_admin or tenancy core admin.
+      responses:
+        "204":
+          description: Grant revoked
+        "403":
+          description: Forbidden
+        "404":
+          description: User or grant not found

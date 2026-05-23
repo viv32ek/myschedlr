@@ -5,8 +5,26 @@
 - `pk` = partition key (string), `sk` = sort key (string) on every table
 - Prefixes like `USER#`, `COURSE#` make item types queryable within a partition
 - `#METADATA` sort key holds the canonical item attributes
-- All IDs are UUIDs unless noted
 - `createdAt` / `updatedAt` are ISO-8601 strings
+
+### ID Scheme — Prefixed NanoID
+All entity IDs are generated with `nanoid(12)` (URL-safe alphabet, ~71 bits of entropy) and prefixed by entity type. This makes IDs human-readable and self-describing in logs, URLs, and support tickets.
+
+| Prefix | Entity | Example |
+|--------|--------|---------|
+| `usr_` | User (all roles) | `usr_V1StGXR8_Z5j` |
+| `crs_` | Course | `crs_9mNpQrKj2wX` |
+| `sub_` | Subject (embedded) | `sub_3xY7wZnKpLm` |
+| `chp_` | Chapter (embedded) | `chp_pLm7wZnK3xY` |
+| `unt_` | Unit (embedded) | `unt_nK3xYpLm7wZ` |
+| `sch_` | School | `sch_Qr9mNpKj2wX` |
+| `grp_` | StudentGroup | `grp_7wZnK3xYpLm` |
+| `bat_` | Batch | `bat_Kj2wX9mNpQr` |
+| `cls_` | Class | `cls_ZnK3xYpLm7w` |
+| `tst_` | Test | `tst_YpLm7wZnK3x` |
+| `bil_` | BillingRecord | `bil_m7wZnK3xYpL` |
+
+> Generate with: `const { nanoid } = require('nanoid'); const id = prefix + nanoid(12);`
 
 ---
 
@@ -21,14 +39,14 @@
 ### GSIs
 | Index | pk | sk | Purpose |
 |-------|----|----|---------|
-| `id-index` | `id` | — | Look up user by UUID (used in JWT `sub` resolution) |
+| `id-index` | `id` | — | Look up user by ID (used in JWT `sub` resolution) |
 
 ### Item Attributes
 | Attribute | Type | Notes |
 |-----------|------|-------|
 | `pk` | String | `USER#{email}` |
 | `sk` | String | `#METADATA` |
-| `id` | String (UUID) | Stable user ID, referenced across all tables |
+| `id` | String (`usr_*`) | Stable user ID, referenced across all tables |
 | `email` | String | Unique within tenant |
 | `name` | String | Display name |
 | `role` | String | `admin` \| `faculty` \| `student` |
@@ -62,10 +80,7 @@ None required.
 |-----------|------|-------|
 | `pk` | String | `COURSE#{id}` |
 | `sk` | String | `#METADATA` |
-| `id` | String (UUID) | |
-| `name` | String | |
-| `description` | String | |
-| `version` | Number | Incremented on every write — used for optimistic locking |
+| `id` | String (`crs_*`) | | Incremented on every write — used for optimistic locking |
 | `subjects` | List\<Subject\> | Full tree embedded (see schema below) |
 | `createdAt` | String | |
 | `updatedAt` | String | |
@@ -73,19 +88,19 @@ None required.
 #### Embedded `Subject` schema
 ```json
 {
-  "id": "<uuid>",
+  "id": "sub_3xY7wZnKpLm",
   "name": "string",
   "description": "string",
   "order": 1,
   "chapters": [
     {
-      "id": "<uuid>",
+      "id": "chp_pLm7wZnK3xY",
       "name": "string",
       "description": "string",
       "order": 1,
       "units": [
         {
-          "id": "<uuid>",
+          "id": "unt_nK3xYpLm7wZ",
           "name": "string",
           "contentUrl": "string (optional)",
           "order": 1
@@ -132,7 +147,7 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 ### GSIs
 | Index | pk | sk | Purpose |
 |-------|----|----|---------|
-| `entity-id-index` | `entityId` | `entityType` | Look up school or group by UUID |
+| `entity-id-index` | `entityId` | `entityType` | Look up school or group by ID |
 | `student-groups-index` | `studentId` | `sk` | Find all groups a student belongs to |
 
 ### Item Attributes — School
@@ -140,7 +155,7 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `SCHOOL#{id}` |
 | `sk` | String | `#METADATA` |
-| `entityId` | String (UUID) | `schoolId`, used by GSI |
+| `entityId` | String (`sch_*`) | `schoolId`, used by GSI |
 | `entityType` | String | `school` |
 | `name` | String | |
 | `address` | String | |
@@ -152,9 +167,9 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `SCHOOL#{schoolId}` (child row) or `GROUP#{id}` (own row) |
 | `sk` | String | `GROUP#{id}` or `#METADATA` |
-| `entityId` | String (UUID) | `groupId` |
+| `entityId` | String (`grp_*`) | `groupId` |
 | `entityType` | String | `group` |
-| `schoolId` | String (UUID) | |
+| `schoolId` | String (`sch_*`) | |
 | `name` | String | e.g. "Grade 10 - A" |
 | `createdAt` | String | |
 
@@ -163,8 +178,8 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `GROUP#{groupId}` |
 | `sk` | String | `STUDENT#{studentId}` |
-| `groupId` | String (UUID) | |
-| `studentId` | String (UUID) | |
+| `groupId` | String (`grp_*`) | |
+| `studentId` | String (`usr_*`) | |
 | `joinedAt` | String | |
 
 ### Item Attributes — FacultyAssignment
@@ -172,9 +187,9 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `FACULTY#{facultyId}` |
 | `sk` | String | `ORG` \| `SCHOOL#{id}` \| `COURSE#{id}` \| `SUBJECT#{id}` |
-| `facultyId` | String (UUID) | |
+| `facultyId` | String (`usr_*`) | |
 | `scope` | String | `org` \| `school` \| `course` \| `subject` |
-| `scopeId` | String (UUID) | ID of the scoped entity (null for org) |
+| `scopeId` | String | ID of the scoped entity (`sch_*`, `crs_*`, or `sub_*`; null for org) |
 | `assignedAt` | String | |
 
 ### Access Patterns
@@ -215,9 +230,9 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `BATCH#{id}` |
 | `sk` | String | `#METADATA` |
-| `id` | String (UUID) | |
-| `courseId` | String (UUID) | Used by GSI |
-| `schoolId` | String (UUID) | Used by GSI |
+| `id` | String (`bat_*`) | |
+| `courseId` | String (`crs_*`) | Used by GSI |
+| `schoolId` | String (`sch_*`) | Used by GSI |
 | `name` | String | e.g. "Physics 2025 — Batch A" |
 | `startDate` | String (ISO date) | Used as GSI sort key |
 | `endDate` | String (ISO date) | |
@@ -230,8 +245,8 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `BATCH#{batchId}` |
 | `sk` | String | `STUDENT#{studentId}` |
-| `batchId` | String (UUID) | |
-| `studentId` | String (UUID) | Used by `student-batches-index` |
+| `batchId` | String (`bat_*`) | |
+| `studentId` | String (`usr_*`) | Used by `student-batches-index` |
 | `enrolledAt` | String | |
 
 ### Item Attributes — Class
@@ -239,11 +254,11 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `BATCH#{batchId}` |
 | `sk` | String | `CLASS#{classId}` |
-| `id` | String (UUID) | `classId` |
-| `batchId` | String (UUID) | |
-| `subjectId` | String (UUID) | Catalog reference |
+| `id` | String (`cls_*`) | `classId` |
+| `batchId` | String (`bat_*`) | |
+| `subjectId` | String (`sub_*`) | Catalog reference |
 | `subjectName` | String | Denormalized from catalog blob at scheduling time — avoids re-fetching the course for display |
-| `facultyId` | String (UUID) | Used by `faculty-classes-index` |
+| `facultyId` | String (`usr_*`) | Used by `faculty-classes-index` |
 | `scheduledAt` | String (ISO-8601) | Used by GSI sort key |
 | `durationMinutes` | Number | |
 | `status` | String | `scheduled` \| `completed` \| `cancelled` |
@@ -255,9 +270,9 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `BATCH#{batchId}` |
 | `sk` | String | `TEST#{testId}` |
-| `id` | String (UUID) | `testId` |
-| `batchId` | String (UUID) | |
-| `subjectId` | String (UUID) | |
+| `id` | String (`tst_*`) | `testId` |
+| `batchId` | String (`bat_*`) | |
+| `subjectId` | String (`sub_*`) | |
 | `scheduledAt` | String (ISO-8601) | |
 | `totalMarks` | Number | |
 | `status` | String | `scheduled` \| `completed` |
@@ -295,12 +310,12 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `CLASS#{classId}` |
 | `sk` | String | `STUDENT#{studentId}` |
-| `classId` | String (UUID) | Used by GSI |
-| `studentId` | String (UUID) | Used by GSI |
-| `batchId` | String (UUID) | Denormalized for filtering |
+| `classId` | String (`cls_*`) | Used by GSI |
+| `studentId` | String (`usr_*`) | Used by GSI |
+| `batchId` | String (`bat_*`) | Denormalized for filtering |
 | `status` | String | `present` \| `absent` \| `late` |
 | `markedAt` | String (ISO-8601) | When attendance was recorded |
-| `markedBy` | String (UUID) | Faculty userId who recorded it |
+| `markedBy` | String (`usr_*`) | Faculty userId who recorded it |
 
 ### Access Patterns
 | Pattern | Operation |
@@ -331,8 +346,8 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 |-----------|------|-------|
 | `pk` | String | `USER#{userId}` |
 | `sk` | String | `BILLING#{billingId}` |
-| `id` | String (UUID) | `billingId` |
-| `userId` | String (UUID) | |
+| `id` | String (`bil_*`) | `billingId` |
+| `userId` | String (`usr_*`) | |
 | `role` | String | `faculty` \| `admin` |
 | `description` | String | What the billing is for |
 | `hours` | Number | Hours worked/taught |

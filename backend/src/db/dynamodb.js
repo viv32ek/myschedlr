@@ -1,7 +1,7 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient } = require('@aws-sdk/lib-dynamodb');
 
-const clientConfig = { region: process.env.AWS_REGION || 'us-east-1' };
+const clientConfig = { region: process.env.AWS_REGION || 'ap-south-1' };
 
 // DynamoDB Local support for local dev
 if (process.env.DYNAMODB_ENDPOINT) {

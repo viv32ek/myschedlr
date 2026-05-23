@@ -1,53 +1,112 @@
 # MySchedlr — Master Product Spec
 
 ## Overview
-MySchedlr is a multi-tenant SaaS scheduling application built on AWS. Each tenant gets fully isolated infrastructure (ECS service, DynamoDB table, Cognito User Pool). Users within a tenant can schedule and manage appointments/events.
+MySchedlr is a multi-tenant SaaS platform for education organizations. It lets admins manage schools, courses, and batches; faculty to schedule and deliver classes; and students to track their enrolled batches, classes, and test results. Each tenant (organization) gets fully isolated infrastructure (ECS service, DynamoDB tables, Cognito User Pool) — zero cross-tenant data access.
 
 ## Goals
 - [x] Per-tenant infrastructure isolation (ECS + DynamoDB + Cognito)
 - [x] AWS-native authentication via Cognito (no custom JWT)
-- [ ] Core scheduling CRUD (create, read, update, delete appointments)
-- [ ] Calendar views (day / week / month)
-- [ ] Notifications (email/push) for upcoming appointments
+- [ ] Enable education orgs to manage their entire academic calendar from a single platform
+- [ ] Allow faculties to track hours taught and generate billing records automatically
+- [ ] Give students a clear view of their schedule, attendance, and upcoming tests
+- [ ] Support multi-school orgs where the same course catalog can be reused across schools
 
 ## Users & Roles
+A user can hold **multiple roles simultaneously** (e.g. a person who is both an admin and a faculty member).
+
 | Role | Description |
 |------|-------------|
-| `admin` | Manages tenant resources; can CRUD all schedules |
-| `user` | Standard authenticated user; manages own schedules |
+| `admin` | Org-level admin — manages schools, courses, batches, faculty, billing |
+| `faculty` | Teacher — can be scoped to the whole org or tagged to specific schools/courses/subjects |
+| `student` | Enrolled learner — views their batch schedule, attendance, and tests |
 
-Roles are managed as Cognito User Pool Groups. The backend reads the role from the `cognito:groups` claim in the access token.
+Roles are stored as a DynamoDB String Set (`SS`) so a user can hold multiple simultaneously. The backend reads roles from the DynamoDB profile (not from Cognito groups).
 
 ## Auth Architecture
 Authentication is delegated entirely to **AWS Cognito**. There are no custom auth endpoints on the backend.
 
 - One **Cognito User Pool per tenant** (matches per-tenant infrastructure isolation)
 - Clients (UI, mobile) talk directly to Cognito for sign-up, sign-in, token refresh, and password reset
-- The backend is a **pure resource server**: it validates Cognito-issued JWT access tokens using `aws-jwt-verify`
+- The backend is a **pure resource server**: validates Cognito-issued JWT access tokens using `aws-jwt-verify`
 - Token-to-tenant isolation is implicit: each ECS task is configured with its tenant's `COGNITO_USER_POOL_ID`, so tokens from other pools automatically fail verification
-- User profiles are **lazy-provisioned** in DynamoDB on first `GET /users/me`; identity fields (email, name) remain in Cognito
+- User profiles (roles, name) are provisioned in DynamoDB via `POST /auth/provision` after first Cognito login; the `id` field maps to the Cognito `sub`
 
 ## Core Features
 | Feature | Priority | Status |
 |---------|----------|--------|
-| Auth — sign up / sign in / sign out | P0 | ✅ done |
-| Auth — token refresh (automatic via SDK) | P0 | ✅ done |
-| User profile (lazy-provisioned from Cognito sub) | P0 | ✅ done |
+| Auth — sign up / sign in / sign out (Cognito) | P0 | ✅ done |
+| Auth — token refresh (automatic via Amplify SDK) | P0 | ✅ done |
 | Per-tenant CDK infra (ECS + DynamoDB + Cognito) | P0 | ✅ done |
-| Scheduling CRUD | P1 | planned |
-| Calendar views | P1 | planned |
-| Mobile ProfileScreen | P2 | planned (v2) |
-| Notifications | P2 | planned |
+| User profile provisioning (`POST /auth/provision`) | P0 | in-progress |
+| Course catalog (courses → subjects → chapters → units) | P0 | planned |
+| Schools & student groups | P0 | planned |
+| Batch management (create batches, enroll students) | P0 | planned |
+| Class scheduling (schedule classes in a batch, assign faculty) | P0 | planned |
+| Two-tier configuration (deployment modules + tenant feature flags) | P0 | planned |
+| Test scheduling | P1 | planned |
+| Attendance tracking (per class, per student) | P1 | planned |
+| Faculty billing (auto-calculate from hours taught) | P1 | planned |
+| Admin billing (manual billing records for admin work) | P2 | planned |
+| Faculty scoping (tag faculty to school / course / subject) | P2 | planned |
+| Reports & dashboards | P3 | planned |
+
+## Configuration
+MySchedlr uses a two-tier configuration system.
+
+### Tier 1 — Deployment feature modules (ops-controlled)
+Set via environment variables on the ECS task at deploy time. Code gates entire feature surfaces — routing, models, and UI — behind these flags.
+
+| Env var | Values | Default | Controls |
+|---------|--------|---------|----------|
+| `FEATURE_CORE` | `true` \| `false` | `true` (always) | Catalog, schools, batches, scheduling |
+| `FEATURE_BILLING` | `true` \| `false` | `false` | Faculty + admin billing module |
+
+### Tier 2 — Tenant feature flags (super-admin-controlled)
+Fine-grained flags set by the org's super admin. Stored as tenant defaults and can be partially overridden at the course or batch level. Resolution order: **deployment → tenant defaults → course override → batch override** (later takes precedence).
+
+| Flag | Type | Tenant default | Overridable at |
+|------|------|----------------|----------------|
+| `chaptersEnabled` | bool | `true` | course, batch |
+| `unitsEnabled` | bool | `true` | course, batch |
+| `attendanceEnabled` | bool | `true` | batch |
+| `chapterLoggingEnabled` | bool | `false` | batch |
+| `testsEnabled` | bool | `true` | batch |
+
+> `unitsEnabled` requires `chaptersEnabled`. If `chaptersEnabled` is turned off, units are implicitly off too regardless of the `unitsEnabled` flag.
+
+Full storage schema lives in `specs/backend/tables.md` under the **Configuration** section.
 
 ## Data Models
-> High-level entities — detailed schemas live in `specs/api/openapi.yaml`
+> High-level entities — DynamoDB table schemas live in `specs/backend/tables.md`
 
-- **User** – `id` (= Cognito `sub`), `role`, `tenantId`, `createdAt`
-  - `email` and `name` are identity fields owned by Cognito; they are **not** stored in DynamoDB
-  - DynamoDB key: `pk = USER#<cognitoSub>` (no GSI needed)
-- *(Appointment, Schedule — to be defined when scheduling feature is specced)*
+### Identity
+- **User** – id (= Cognito `sub`), email, name, roles[] (`admin` | `faculty` | `student`, one or more), tenantId, createdAt
+
+### Course Catalog (templates — reusable across schools; full tree stored as blob per course)
+- **Course** – id, name, description, version, subjects[] (embedded tree), createdAt
+- **Subject** *(embedded in Course blob)* – id, name, description, order, chapters[]
+- **Chapter** *(embedded in Subject)* – id, name, description, order, units[]
+- **Unit** *(embedded in Chapter)* – id, name, contentUrl, order
+
+### Organization Structure
+- **School** – id, name, address, createdAt
+- **StudentGroup** – id, schoolId, name (e.g. "Grade 10 - A")
+- **StudentGroupMembership** – groupId, studentId, joinedAt
+- **FacultyAssignment** *(optional tagging)* – facultyId, scope (`org` | `school` | `course` | `subject`), scopeId
+
+### Delivery
+- **Batch** – id, courseId, schoolId, name, startDate, endDate, status (`upcoming` | `active` | `completed`)
+- **BatchStudent** – batchId, studentId, enrolledAt
+- **Class** – id, batchId, subjectId, facultyId, scheduledAt, durationMinutes, status (`scheduled` | `completed` | `cancelled`), notes
+- **Test** – id, batchId, subjectId, scheduledAt, totalMarks, status (`scheduled` | `completed`)
+
+### Tracking
+- **Attendance** – classId, studentId, status (`present` | `absent` | `late`)
+- **BillingRecord** – id, userId, role, description, hours, ratePerHour, amount, periodStart, periodEnd, status (`draft` | `submitted` | `approved` | `paid`)
 
 ## Out of Scope (v1)
-- Mobile `ProfileScreen` — listed in `specs/mobile/screens.md` but deferred to v2
-- Password reset UI (handled by Cognito hosted UI or a future custom flow)
-- Multi-role users (a user belongs to exactly one Cognito group)
+- Video conferencing / live class links
+- Automated payment processing
+- Parent portal / notifications
+- Mobile push notifications
+- Password reset UI (handled by Cognito hosted UI)

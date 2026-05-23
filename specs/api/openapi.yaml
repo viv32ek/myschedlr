@@ -3,14 +3,19 @@ info:
   title: MySchedlr API
   version: 2.0.0
   description: |
-    API contract for MySchedlr.
+    API contract for MySchedlr — update this spec before implementing endpoints.
 
-    **Authentication** is handled by AWS Cognito — the backend is a resource server only.
-    Clients authenticate directly against the Cognito User Pool using the Amplify SDK,
-    then pass the resulting access token as a Bearer token to all protected endpoints.
+    ## Authentication
+    Authentication is handled by **AWS Cognito**. The backend does NOT
+    implement signup or login — clients use the Cognito SDK (Amplify) directly.
 
-    Token issuance, refresh, signup, login, and password reset are all performed via
-    the Cognito SDK — there are no `/auth/*` endpoints on this server.
+    The backend receives a Cognito-issued JWT as a Bearer token, verifies it
+    against the Cognito JWKS endpoint using `aws-jwt-verify`, and reads the
+    `sub` claim to resolve the user profile from DynamoDB.
+
+    The only backend auth endpoint is `POST /auth/provision`, called once
+    after a user's first successful Cognito login to create their DynamoDB
+    profile (roles, tenantId, name).
 
 servers:
   - url: http://localhost:4000
@@ -21,7 +26,7 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: JWT (Cognito)
       description: |
         Cognito access token obtained via Amplify.Auth.signIn() / fetchAuthSession().
         Issued by the tenant-specific Cognito User Pool (RS256, verified via JWKS).
@@ -30,9 +35,16 @@ components:
     User:
       type: object
       properties:
-        id:        { type: string, description: Cognito sub (UUID) }
-        role:      { type: string, enum: [admin, user] }
-        tenantId:  { type: string }
+        id:        { type: string, description: "Cognito sub — also stored as usr_* in DynamoDB" }
+        email:     { type: string, format: email }
+        name:      { type: string }
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [admin, faculty, student]
+          minItems: 1
+          description: A user may hold multiple roles simultaneously
         createdAt: { type: string, format: date-time }
 
     Error:
@@ -59,6 +71,42 @@ paths:
                 properties:
                   status: { type: string, example: ok }
 
+  /auth/provision:
+    post:
+      summary: Create DynamoDB profile after first Cognito login
+      description: |
+        Called by the client immediately after a user's first successful
+        Cognito authentication. Creates the user's profile record in DynamoDB
+        (name, roles, tenantId). Idempotent — safe to call on every login;
+        does nothing if the profile already exists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:  { type: string }
+                roles:
+                  type: array
+                  items: { type: string, enum: [admin, faculty, student] }
+                  minItems: 1
+                  default: [student]
+      responses:
+        "201":
+          description: Profile created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "200":
+          description: Profile already exists (idempotent)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401":
+          description: Unauthorized
+
   /users/me:
     get:
       summary: Get current user profile
@@ -76,4 +124,3 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-

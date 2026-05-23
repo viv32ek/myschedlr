@@ -16,11 +16,52 @@ A user can hold **multiple roles simultaneously** (e.g. a person who is both an 
 
 | Role | Description |
 |------|-------------|
-| `admin` | Org-level admin — manages schools, courses, batches, faculty, billing |
-| `faculty` | Teacher — can be scoped to the whole org or tagged to specific schools/courses/subjects |
-| `student` | Enrolled learner — views their batch schedule, attendance, and tests |
+| `admin` | Platform administrator — sub-types and scoped permissions described below |
+| `faculty` | Teacher — assigned to batches/subjects by admins; views schedule, takes attendance, logs chapter/unit coverage |
+| `student` | Enrolled learner — always in a student group within a school; views batch schedule, attendance, and tests |
 
 Roles are stored as a DynamoDB String Set (`SS`) so a user can hold multiple simultaneously. The backend reads roles from the DynamoDB profile (not from Cognito groups).
+
+### Admin Sub-Types
+
+The `adminType` field on the user record determines their admin tier:
+
+| `adminType` | Who can assign | Description |
+|-------------|----------------|-------------|
+| `super_admin` | Platform ops only | Full tenant-level superpowers. Can configure anything, manage tenancy, and delegate access to any user. |
+| `tenancy_admin` | Super admin | Access to tenancy configuration modules, controlled by the `tenancyAccess` set: `core` (catalog, schools, batches, scheduling) and/or `billing`. A user can hold both. |
+| *(absent / null)* | — | No elevated admin privileges beyond any delegated scope grants they may hold. |
+
+### Delegated Scope Access
+
+Super admins and tenancy admins with `core` access can delegate scoped access to **any user** (regardless of their existing roles). A user can hold **multiple delegated grants simultaneously** across different scopes and scope IDs.
+
+**RO is always the baseline** — a grant always includes full read access within the scope. Write permissions are explicitly granted on top:
+
+| Scope | Write Permissions (granted individually on top of RO) |
+|-------|-------------------------------------------------------|
+| `course` | `edit_course` — edit any aspect of the course |
+| | `manage_batches` — create/edit batches within the course |
+| | `manage_schedules` — create/edit class schedules for batches in the course |
+| `school` | `edit_school` — edit any aspect of the school |
+| | `manage_batches` — create/edit batches within the school |
+| | `manage_schedules` — create/edit class schedules for batches in the school |
+| `batch` | `edit_batch` — edit any aspect of the batch |
+| | `manage_schedules` — create/edit class schedules for the batch |
+
+> Example: a user could hold RO on School A, `edit_course`+`manage_schedules` on Course B, and full RW on Batch C — all simultaneously.
+
+### Faculty Capabilities
+- View subjects they are assigned to
+- View their class schedule
+- Take attendance for their classes
+- Log which chapters and units were covered in a class session (when `chapterLoggingEnabled` is on for the batch)
+
+> Faculty are assigned to batches and subjects by admins — they cannot self-assign.
+
+### Student Constraints
+- Students must always belong to a **student group within a school** before they can be enrolled in a batch
+- A student cannot exist in a batch without being a member of a school's student group
 
 ## Auth Architecture
 Authentication is delegated entirely to **AWS Cognito**. There are no custom auth endpoints on the backend.
@@ -84,7 +125,8 @@ See [`specs/designs/README.md`](designs/README.md) for download instructions, na
 > High-level entities — DynamoDB table schemas live in `specs/backend/tables.md`
 
 ### Identity
-- **User** – id (= Cognito `sub`), email, name, roles[] (`admin` | `faculty` | `student`, one or more), tenantId, createdAt
+- **User** – id (= Cognito `sub`), email, name, roles[] (`admin` | `faculty` | `student`, one or more), adminType (`super_admin` | `tenancy_admin` | null), tenancyAccess[] (`core` | `billing`, only when `adminType = tenancy_admin`), tenantId, createdAt
+- **AdminGrant** – userId, scope (`course` | `school` | `batch`), scopeId, permissions[] (`edit_course` | `manage_batches` | `manage_schedules` | `edit_school` | `edit_batch`), grantedBy, grantedAt — one record per scoped delegation; a user may hold many
 
 ### Course Catalog (templates — reusable across schools; full tree stored as blob per course)
 - **Course** – id, name, description, version, subjects[] (embedded tree), createdAt

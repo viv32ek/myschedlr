@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MySchedlr API
-  version: 1.0.0
+  version: 2.0.0
   description: |
     API contract for MySchedlr — update this spec before implementing endpoints.
 
@@ -10,8 +10,8 @@ info:
     implement signup or login — clients use the Cognito SDK (Amplify) directly.
 
     The backend receives a Cognito-issued JWT as a Bearer token, verifies it
-    against the Cognito JWKS endpoint, and reads the `sub` claim to resolve
-    the user profile from DynamoDB.
+    against the Cognito JWKS endpoint using `aws-jwt-verify`, and reads the
+    `sub` claim to resolve the user profile from DynamoDB.
 
     The only backend auth endpoint is `POST /auth/provision`, called once
     after a user's first successful Cognito login to create their DynamoDB
@@ -27,6 +27,9 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT (Cognito)
+      description: |
+        Cognito access token obtained via Amplify.Auth.signIn() / fetchAuthSession().
+        Issued by the tenant-specific Cognito User Pool (RS256, verified via JWKS).
 
   schemas:
     User:
@@ -107,6 +110,9 @@ paths:
   /users/me:
     get:
       summary: Get current user profile
+      description: |
+        Returns the DynamoDB profile for the authenticated Cognito user.
+        A minimal profile is created automatically on first call (lazy provisioning).
       responses:
         "200":
           description: Current user
@@ -114,4 +120,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
         "401":
-          description: Unauthorized
+          description: Missing or invalid Cognito access token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }

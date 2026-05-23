@@ -1,9 +1,11 @@
 # MySchedlr — Master Product Spec
 
 ## Overview
-MySchedlr is a multi-tenant SaaS platform for education organizations. It lets admins manage schools, courses, and batches; faculty to schedule and deliver classes; and students to track their enrolled batches, classes, and test results. Each tenant (organization) is fully siloed — zero cross-tenant data access.
+MySchedlr is a multi-tenant SaaS platform for education organizations. It lets admins manage schools, courses, and batches; faculty to schedule and deliver classes; and students to track their enrolled batches, classes, and test results. Each tenant (organization) gets fully isolated infrastructure (ECS service, DynamoDB tables, Cognito User Pool) — zero cross-tenant data access.
 
 ## Goals
+- [x] Per-tenant infrastructure isolation (ECS + DynamoDB + Cognito)
+- [x] AWS-native authentication via Cognito (no custom JWT)
 - [ ] Enable education orgs to manage their entire academic calendar from a single platform
 - [ ] Allow faculties to track hours taught and generate billing records automatically
 - [ ] Give students a clear view of their schedule, attendance, and upcoming tests
@@ -18,10 +20,24 @@ A user can hold **multiple roles simultaneously** (e.g. a person who is both an 
 | `faculty` | Teacher — can be scoped to the whole org or tagged to specific schools/courses/subjects |
 | `student` | Enrolled learner — views their batch schedule, attendance, and tests |
 
+Roles are stored as a DynamoDB String Set (`SS`) so a user can hold multiple simultaneously. The backend reads roles from the DynamoDB profile (not from Cognito groups).
+
+## Auth Architecture
+Authentication is delegated entirely to **AWS Cognito**. There are no custom auth endpoints on the backend.
+
+- One **Cognito User Pool per tenant** (matches per-tenant infrastructure isolation)
+- Clients (UI, mobile) talk directly to Cognito for sign-up, sign-in, token refresh, and password reset
+- The backend is a **pure resource server**: validates Cognito-issued JWT access tokens using `aws-jwt-verify`
+- Token-to-tenant isolation is implicit: each ECS task is configured with its tenant's `COGNITO_USER_POOL_ID`, so tokens from other pools automatically fail verification
+- User profiles (roles, name) are provisioned in DynamoDB via `POST /auth/provision` after first Cognito login; the `id` field maps to the Cognito `sub`
+
 ## Core Features
 | Feature | Priority | Status |
 |---------|----------|--------|
-| Auth (sign up / login / refresh) | P0 | in-progress |
+| Auth — sign up / sign in / sign out (Cognito) | P0 | ✅ done |
+| Auth — token refresh (automatic via Amplify SDK) | P0 | ✅ done |
+| Per-tenant CDK infra (ECS + DynamoDB + Cognito) | P0 | ✅ done |
+| User profile provisioning (`POST /auth/provision`) | P0 | in-progress |
 | Course catalog (courses → subjects → chapters → units) | P0 | planned |
 | Schools & student groups | P0 | planned |
 | Batch management (create batches, enroll students) | P0 | planned |
@@ -64,7 +80,7 @@ Full storage schema lives in `specs/backend/tables.md` under the **Configuration
 > High-level entities — DynamoDB table schemas live in `specs/backend/tables.md`
 
 ### Identity
-- **User** – id, email, name, roles[] (`admin` | `faculty` | `student`, one or more), createdAt
+- **User** – id (= Cognito `sub`), email, name, roles[] (`admin` | `faculty` | `student`, one or more), tenantId, createdAt
 
 ### Course Catalog (templates — reusable across schools; full tree stored as blob per course)
 - **Course** – id, name, description, version, subjects[] (embedded tree), createdAt
@@ -93,3 +109,4 @@ Full storage schema lives in `specs/backend/tables.md` under the **Configuration
 - Automated payment processing
 - Parent portal / notifications
 - Mobile push notifications
+- Password reset UI (handled by Cognito hosted UI)

@@ -43,6 +43,10 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.x"
+      - name: Create placeholder .env for tests
+        run: |
+          printf 'COGNITO_USER_POOL_ID=placeholder\nCOGNITO_CLIENT_ID=placeholder\nCOGNITO_REGION=us-east-1\n' > .env
+        working-directory: mobile
       - run: flutter pub get
         working-directory: mobile
       - run: flutter test

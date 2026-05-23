@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { api } from '../services/api';
+import { api, getIdTokenPayload } from '../services/api';
 
 export default function DashboardPage() {
   const { signOut } = useAuth();
@@ -9,9 +9,24 @@ export default function DashboardPage() {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    api.users.me()
-      .then(setUser)
-      .catch(() => navigate('/login'));
+    const load = async () => {
+      try {
+        const me = await api.users.me();
+        setUser(me);
+      } catch (err) {
+        if (err._status === 404) {
+          // First login — provision the profile from the Cognito ID token then retry
+          const payload = await getIdTokenPayload();
+          if (!payload) { navigate('/login'); return; }
+          await api.auth.provision(payload.name ?? payload.email, payload.email);
+          const me = await api.users.me();
+          setUser(me);
+        } else {
+          navigate('/login');
+        }
+      }
+    };
+    load();
   }, [navigate]);
 
   const handleLogout = () => {
@@ -22,7 +37,7 @@ export default function DashboardPage() {
   return (
     <div>
       <h1>Dashboard</h1>
-      {user && <p>Signed in as: {user.id} — role: {user.role}</p>}
+      {user && <p>Signed in as: {user.email} — roles: {user.roles?.join(', ')}</p>}
       <button onClick={handleLogout}>Log out</button>
     </div>
   );

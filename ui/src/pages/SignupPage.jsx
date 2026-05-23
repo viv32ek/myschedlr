@@ -2,21 +2,32 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
-export default function LoginPage() {
-  const { signIn, loading, error } = useAuth();
+export default function SignupPage() {
+  const { signUp, loading, error } = useAuth();
   const navigate = useNavigate();
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    await signIn(email, password).then(() => navigate('/dashboard')).catch(() => null);
+    await signUp(email, password, name)
+      .then(() => navigate('/login'))
+      .catch(() => null);
   };
 
   return (
     <div>
-      <h1>Sign in</h1>
+      <h1>Create account</h1>
       <form onSubmit={handleSubmit}>
+        <div>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Full name"
+            required
+          />
+        </div>
         <div>
           <input
             type="email"
@@ -31,16 +42,17 @@ export default function LoginPage() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
+            placeholder="Password (min 8 chars)"
             required
+            minLength={8}
           />
         </div>
         {error && <p style={{ color: 'red' }}>{error}</p>}
         <button type="submit" disabled={loading}>
-          {loading ? 'Signing in…' : 'Sign in'}
+          {loading ? 'Creating account…' : 'Create account'}
         </button>
       </form>
-      <p>No account? <Link to="/signup">Create one</Link></p>
+      <p>Already have an account? <Link to="/login">Sign in</Link></p>
     </div>
   );
 }

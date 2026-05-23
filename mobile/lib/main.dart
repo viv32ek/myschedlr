@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:amplify_flutter/amplify_flutter.dart';
+import 'package:amplify_auth_cognito/amplify_auth_cognito.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 import 'screens/login_screen.dart';
+import 'screens/signup_screen.dart';
 import 'screens/home_screen.dart';
+import 'config/amplify_config.dart';
 
-final _router = GoRouter(
-  initialLocation: '/login',
-  routes: [
-    GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
-    GoRoute(path: '/home', builder: (_, __) => const HomeScreen()),
-  ],
-);
-
-void main() => runApp(const MySchedlrApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: '.env');
+  await _configureAmplify();
+  runApp(const MySchedlrApp());
+}
 
 class MySchedlrApp extends StatelessWidget {
   const MySchedlrApp({super.key});

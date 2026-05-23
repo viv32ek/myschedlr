@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -46,7 +47,34 @@ export class TenantStack extends cdk.Stack {
     const { tenant } = props;
     const prefix = `myschedlr-${tenant.id}`;
 
-    // ── DynamoDB tables (one per tenant — complete data silo) ─────────────────
+    // ── Cognito User Pool (one per tenant — complete auth silo) ──────────────
+    const userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: `${prefix}-users`,
+      selfSignUpEnabled: true,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: false,
+        requireDigits: true,
+        requireSymbols: false,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // SPA/mobile clients use SRP auth flow and have no client secret
+    const userPoolClient = new cognito.UserPoolClient(this, 'UserPoolClient', {
+      userPool,
+      authFlows: { userSrp: true },
+      generateSecret: false,
+    });
+
+    // ── DynamoDB tables (one per tenant — app profile data silo) ─────────────
+    //
+    // Key design: pk = USER#<cognitoSub>, sk = #METADATA
+    // Profile is lazily created on first GET /users/me; passwords are in Cognito.
     const usersTable = new dynamodb.Table(this, 'UsersTable', {
       tableName: `${prefix}-users`,
       partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
@@ -54,12 +82,6 @@ export class TenantStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN,  // never auto-delete tenant data
       pointInTimeRecovery: true,
-    });
-
-    usersTable.addGlobalSecondaryIndex({
-      indexName: 'id-index',
-      partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL,
     });
 
     // ── ECS Fargate service ───────────────────────────────────────────────────
@@ -76,14 +98,12 @@ export class TenantStack extends cdk.Stack {
         AWS_REGION: this.region,
         // Locks this ECS deployment to this tenant — no header/subdomain resolution needed
         TENANT_ID: tenant.id,
+        // Cognito User Pool for JWT verification — no shared secret needed
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+        COGNITO_REGION: this.region,
       },
-      secrets: {
-        // JWT_SECRET: ecs.Secret.fromSsmParameter(
-        //   ssm.StringParameter.fromSecureStringParameterAttributes(this, 'JwtSecret', {
-        //     parameterName: `/${prefix}/jwt-secret`, version: 1,
-        //   })
-        // ),
-      },
+      secrets: {},
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: prefix }),
     });
 
@@ -145,6 +165,8 @@ export class TenantStack extends cdk.Stack {
     });
 
     // ── Outputs ───────────────────────────────────────────────────────────────
+    new cdk.CfnOutput(this, 'UserPoolId',       { value: userPool.userPoolId });
+    new cdk.CfnOutput(this, 'UserPoolClientId', { value: userPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, 'UsersTableName',   { value: usersTable.tableName });
     new cdk.CfnOutput(this, 'CloudFrontUrl',    { value: `https://${distribution.distributionDomainName}` });
     new cdk.CfnOutput(this, 'UiBucketName',     { value: bucket.bucketName });

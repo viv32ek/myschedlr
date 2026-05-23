@@ -1,4 +1,4 @@
-const { GetCommand, PutCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
+const { GetCommand, PutCommand } = require('@aws-sdk/lib-dynamodb');
 const { docClient } = require('../db/dynamodb');
 
 /**
@@ -8,40 +8,40 @@ const { docClient } = require('../db/dynamodb');
  * Table name pattern: myschedlr-{tenantId}-users
  *
  * Key design:
- *   pk  = USER#<email>   (partition key — look-up by email)
- *   sk  = #METADATA      (sort key)
- *   id  = uuid           (stored attribute — used in JWT sub / id-index)
+ *   pk  = USER#<cognitoSub>   (partition key — Cognito user unique identifier)
+ *   sk  = #METADATA           (sort key)
+ *
+ * Passwords are managed by Cognito — no passwordHash stored here.
+ * Profile is lazily created on first GET /users/me.
  */
 const tableName = (tenantId) => `myschedlr-${tenantId}-users`;
 
-const userKey = (email) => ({ pk: `USER#${email}`, sk: '#METADATA' });
+const userKey = (sub) => ({ pk: `USER#${sub}`, sk: '#METADATA' });
 
-const createUser = async (tenantId, { id, email, name, role, passwordHash, createdAt }) => {
-  await docClient.send(new PutCommand({
-    TableName: tableName(tenantId),
-    Item: { ...userKey(email), id, email, name, role, passwordHash, createdAt, tenantId },
-    ConditionExpression: 'attribute_not_exists(pk)',
-  }));
-};
-
-const getUserByEmail = async (tenantId, email) => {
+/**
+ * Returns the existing profile or creates a minimal one on first call.
+ */
+const getOrCreateUser = async (tenantId, { sub, role }) => {
   const { Item } = await docClient.send(new GetCommand({
     TableName: tableName(tenantId),
-    Key: userKey(email),
+    Key: userKey(sub),
   }));
-  return Item ?? null;
-};
+  if (Item) return Item;
 
-const getUserById = async (tenantId, id) => {
-  const { Items } = await docClient.send(new QueryCommand({
+  const user = {
+    ...userKey(sub),
+    id: sub,
+    role,
+    tenantId,
+    createdAt: new Date().toISOString(),
+  };
+  await docClient.send(new PutCommand({
     TableName: tableName(tenantId),
-    IndexName: 'id-index',
-    KeyConditionExpression: 'id = :id',
-    ExpressionAttributeValues: { ':id': id },
-    Limit: 1,
+    Item: user,
+    ConditionExpression: 'attribute_not_exists(pk)',
   }));
-  return Items?.[0] ?? null;
+  return user;
 };
 
-module.exports = { createUser, getUserByEmail, getUserById, tableName };
+module.exports = { getOrCreateUser, tableName };
 

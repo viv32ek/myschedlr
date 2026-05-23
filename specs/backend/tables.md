@@ -29,17 +29,13 @@ All entity IDs are generated with `nanoid(12)` (URL-safe alphabet, ~71 bits of e
 ---
 
 ## Table: `myschedlr-{tenantId}-users`
-> Identity store for all roles. Existing table — extended with `role` values `faculty` and `student`.
+> Identity store for all roles. Extended with `adminType`, `tenancyAccess`, and admin grant items.
 
 ### Key Design
-| pk | sk | Purpose |
-|----|----|---------|
-| `USER#{email}` | `#METADATA` | Primary user record (look up by email) |
-
-### GSIs
-| Index | pk | sk | Purpose |
-|-------|----|----|---------|
-| `id-index` | `id` | — | Look up user by ID (used in JWT `sub` resolution) |
+| pk | sk | Item type |
+|----|----|-----------|
+| `USER#{email}` | `#METADATA` | Primary user record |
+| `USER#{email}` | `GRANT#{scope}#{scopeId}` | Delegated scope access grant |
 
 ### Item Attributes
 | Attribute | Type | Notes |
@@ -49,15 +45,47 @@ All entity IDs are generated with `nanoid(12)` (URL-safe alphabet, ~71 bits of e
 | `id` | String (`usr_*`) | Maps to Cognito `sub` — used in JWT resolution via `id-index` |
 | `email` | String | Unique within tenant |
 | `name` | String | Display name |
-| `roles` | String Set | One or more of: `admin`, `faculty`, `student` — stored as a DynamoDB SS (String Set) |
+| `roles` | String Set | One or more of: `admin`, `faculty`, `student` — stored as a DynamoDB SS |
+| `adminType` | String | `super_admin` \| `tenancy_admin` — absent/null for users with no elevated admin tier |
+| `tenancyAccess` | String Set | Present only when `adminType = tenancy_admin`. Values: `core`, `billing`. A user may hold both. |
 | `createdAt` | String (ISO-8601) | |
 | `tenantId` | String | Denormalized for safety |
+
+### Admin Grant Items
+Delegated scope access records live in the **same users table** as additional items under each user's partition key.
+
+| pk | sk | Purpose |
+|----|----|---------|
+| `USER#{email}` | `GRANT#{scope}#{scopeId}` | One scoped admin grant (e.g. `GRANT#course#crs_9mNpQrKj2wX`) |
+
+| Attribute | Type | Notes |
+|-----------|------|-------|
+| `pk` | String | `USER#{email}` |
+| `sk` | String | `GRANT#{scope}#{scopeId}` |
+| `userId` | String (`usr_*`) | Denormalized for GSI lookups |
+| `scope` | String | `course` \| `school` \| `batch` |
+| `scopeId` | String | ID of the course, school, or batch |
+| `scopeKey` | String | `{scope}#{scopeId}` — denormalized GSI key (e.g. `course#crs_9mNpQrKj2wX`) |
+| `permissions` | String Set | Explicitly granted write permissions. Empty set = RO only. Values by scope: **course** → `edit_course`, `manage_batches`, `manage_schedules`; **school** → `edit_school`, `manage_batches`, `manage_schedules`; **batch** → `edit_batch`, `manage_schedules` |
+| `grantedBy` | String (`usr_*`) | User who created this grant (super admin or tenancy core admin) |
+| `grantedAt` | String (ISO-8601) | |
+
+> A user with RO-only grant has an empty/absent `permissions` set — they can read everything within the scope but write nothing.
+
+### GSIs
+| Index | pk | sk | Purpose |
+|-------|----|----|---------|
+| `id-index` | `id` | — | Look up user by ID (used in JWT `sub` resolution) |
+| `grant-scope-index` | `scopeKey` | — | Find all users who have a grant on a given scope (e.g. all grants for `course#crs_9mNpQrKj2wX`) |
 
 ### Access Patterns
 | Pattern | Operation |
 |---------|-----------|
 | Login by email | `GetItem` pk=`USER#{email}`, sk=`#METADATA` |
 | Resolve JWT sub to user | `Query` `id-index`, pk=`{id}` |
+| Get all grants for a user | `Query` pk=`USER#{email}`, sk begins_with `GRANT#` |
+| Get a specific grant | `GetItem` pk=`USER#{email}`, sk=`GRANT#{scope}#{scopeId}` |
+| Find all grantees for a scope | `Query` `grant-scope-index`, pk=`{scope}#{scopeId}` |
 | List all users (admin) | `Scan` (low cardinality expected) |
 
 ---

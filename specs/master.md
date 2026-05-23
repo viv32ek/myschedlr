@@ -37,11 +37,11 @@ MySchedlr is a multi-tenant SaaS platform for education organizations. It lets a
 ### Identity
 - **User** – id, email, name, role (`admin` | `faculty` | `student`), createdAt
 
-### Course Catalog (templates — reusable across schools)
-- **Course** – id, name, description, createdAt
-- **Subject** – id, courseId, name, description, order
-- **Chapter** – id, subjectId, name, description, order
-- **Unit** – id, chapterId, name, content/url, order
+### Course Catalog (templates — reusable across schools; full tree stored as blob per course)
+- **Course** – id, name, description, version, subjects[] (embedded tree), createdAt
+- **Subject** *(embedded in Course blob)* – id, name, description, order, chapters[]
+- **Chapter** *(embedded in Subject)* – id, name, description, order, units[]
+- **Unit** *(embedded in Chapter)* – id, name, contentUrl, order
 
 ### Organization Structure
 - **School** – id, name, address, createdAt

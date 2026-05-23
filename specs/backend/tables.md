@@ -46,89 +46,71 @@
 ---
 
 ## Table: `myschedlr-{tenantId}-catalog`
-> Hierarchical course catalog: courses → subjects → chapters → units.
-> A single table holds all four item types using composite key partitioning.
+> Course catalog. Each course item embeds its full subject/chapter/unit tree as a JSON blob.
+> One item type — no individual subject, chapter, or unit rows.
 
 ### Key Design
 | pk | sk | Item type |
 |----|----|-----------|
-| `COURSE#{courseId}` | `#METADATA` | Course record |
-| `COURSE#{courseId}` | `SUBJECT#{subjectId}` | Subject under a course |
-| `SUBJECT#{subjectId}` | `#METADATA` | Subject record (for direct subject lookups) |
-| `SUBJECT#{subjectId}` | `CHAPTER#{chapterId}` | Chapter under a subject |
-| `CHAPTER#{chapterId}` | `#METADATA` | Chapter record |
-| `CHAPTER#{chapterId}` | `UNIT#{unitId}` | Unit under a chapter |
+| `COURSE#{courseId}` | `#METADATA` | Course record with embedded tree |
 
 ### GSIs
-| Index | pk | sk | Purpose |
-|-------|----|----|---------|
-| `entity-id-index` | `entityId` | `entityType` | Look up any entity by its UUID (used in batch/class references) |
-
-> Each item stores `entityId = {uuid}` and `entityType = course|subject|chapter|unit` to support the GSI.
+None required.
 
 ### Item Attributes — Course
 | Attribute | Type | Notes |
 |-----------|------|-------|
 | `pk` | String | `COURSE#{id}` |
 | `sk` | String | `#METADATA` |
-| `entityId` | String (UUID) | Used by GSI |
-| `entityType` | String | `course` |
+| `id` | String (UUID) | |
 | `name` | String | |
 | `description` | String | |
+| `version` | Number | Incremented on every write — used for optimistic locking |
+| `subjects` | List\<Subject\> | Full tree embedded (see schema below) |
 | `createdAt` | String | |
 | `updatedAt` | String | |
 
-### Item Attributes — Subject (stored twice: as child under course pk, and as own pk)
-| Attribute | Type | Notes |
-|-----------|------|-------|
-| `pk` | String | `COURSE#{courseId}` or `SUBJECT#{subjectId}` |
-| `sk` | String | `SUBJECT#{subjectId}` (child row) or `#METADATA` (own row) |
-| `entityId` | String (UUID) | `subjectId` — used by GSI |
-| `entityType` | String | `subject` |
-| `courseId` | String (UUID) | Parent reference |
-| `name` | String | |
-| `description` | String | |
-| `order` | Number | Display order within the course |
-| `createdAt` | String | |
+#### Embedded `Subject` schema
+```json
+{
+  "id": "<uuid>",
+  "name": "string",
+  "description": "string",
+  "order": 1,
+  "chapters": [
+    {
+      "id": "<uuid>",
+      "name": "string",
+      "description": "string",
+      "order": 1,
+      "units": [
+        {
+          "id": "<uuid>",
+          "name": "string",
+          "contentUrl": "string (optional)",
+          "order": 1
+        }
+      ]
+    }
+  ]
+}
+```
 
-### Item Attributes — Chapter
-| Attribute | Type | Notes |
-|-----------|------|-------|
-| `pk` | String | `SUBJECT#{subjectId}` or `CHAPTER#{chapterId}` |
-| `sk` | String | `CHAPTER#{chapterId}` (child row) or `#METADATA` (own row) |
-| `entityId` | String (UUID) | `chapterId` |
-| `entityType` | String | `chapter` |
-| `subjectId` | String (UUID) | Parent reference |
-| `name` | String | |
-| `description` | String | |
-| `order` | Number | |
-| `createdAt` | String | |
+> **Note on item size**: DynamoDB enforces a 400KB per-item limit. For typical catalogs (20 subjects x 10 chapters x 10 units with name + URL per unit) this stays well under 50KB. If units need to store large inline text, keep `contentUrl` in the blob and store full content in S3.
 
-### Item Attributes — Unit
-| Attribute | Type | Notes |
-|-----------|------|-------|
-| `pk` | String | `CHAPTER#{chapterId}` |
-| `sk` | String | `UNIT#{unitId}` |
-| `entityId` | String (UUID) | `unitId` |
-| `entityType` | String | `unit` |
-| `chapterId` | String (UUID) | Parent reference |
-| `name` | String | |
-| `contentUrl` | String | Optional URL to material |
-| `content` | String | Optional inline text |
-| `order` | Number | |
-| `createdAt` | String | |
+### Write pattern — optimistic locking
+All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
+1. `GetItem` to fetch the current course item and its `version`
+2. Modify the `subjects` array in application memory
+3. `PutItem` with `ConditionExpression: "version = :v"` — increments `version` by 1
+4. On `ConditionalCheckFailedException`, retry from step 1
 
 ### Access Patterns
 | Pattern | Operation |
 |---------|-----------|
-| List all courses | `Scan` (catalog is org-wide, low count) |
-| Get course details | `GetItem` pk=`COURSE#{id}`, sk=`#METADATA` |
-| List subjects in a course | `Query` pk=`COURSE#{id}`, sk begins_with `SUBJECT#` |
-| Get subject details | `GetItem` pk=`SUBJECT#{id}`, sk=`#METADATA` |
-| List chapters in a subject | `Query` pk=`SUBJECT#{id}`, sk begins_with `CHAPTER#` |
-| Get chapter details | `GetItem` pk=`CHAPTER#{id}`, sk=`#METADATA` |
-| List units in a chapter | `Query` pk=`CHAPTER#{id}`, sk begins_with `UNIT#` |
-| Resolve any entity by UUID | `Query` `entity-id-index`, pk=`{uuid}` |
+| List all courses (names only) | `Scan` with `ProjectionExpression: id, name, description` |
+| Get full course tree | `GetItem` pk=`COURSE#{id}`, sk=`#METADATA` |
+| Add / edit / delete subject, chapter, or unit | Fetch blob → mutate in memory → `PutItem` with version check |
 
 ---
 
@@ -260,6 +242,7 @@
 | `id` | String (UUID) | `classId` |
 | `batchId` | String (UUID) | |
 | `subjectId` | String (UUID) | Catalog reference |
+| `subjectName` | String | Denormalized from catalog blob at scheduling time — avoids re-fetching the course for display |
 | `facultyId` | String (UUID) | Used by `faculty-classes-index` |
 | `scheduledAt` | String (ISO-8601) | Used by GSI sort key |
 | `durationMinutes` | Number | |
@@ -376,7 +359,7 @@
 | Table (per tenant) | Purpose |
 |--------------------|---------|
 | `myschedlr-{tid}-users` | Identity — all roles |
-| `myschedlr-{tid}-catalog` | Courses, subjects, chapters, units |
+| `myschedlr-{tid}-catalog` | Courses with embedded subject/chapter/unit tree (blob per course) |
 | `myschedlr-{tid}-org` | Schools, student groups, faculty assignments |
 | `myschedlr-{tid}-batches` | Batches, enrolled students, classes, tests |
 | `myschedlr-{tid}-attendance` | Class attendance per student |

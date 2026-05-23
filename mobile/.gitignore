@@ -1,0 +1,3 @@
+# Allow the placeholder .env (contains no real credentials).
+# Override with real CDK outputs before deploying.
+!.env

@@ -1,8 +1,16 @@
 openapi: 3.1.0
 info:
   title: MySchedlr API
-  version: 1.0.0
-  description: API contract for MySchedlr — update this spec before implementing endpoints.
+  version: 2.0.0
+  description: |
+    API contract for MySchedlr.
+
+    **Authentication** is handled by AWS Cognito — the backend is a resource server only.
+    Clients authenticate directly against the Cognito User Pool using the Amplify SDK,
+    then pass the resulting access token as a Bearer token to all protected endpoints.
+
+    Token issuance, refresh, signup, login, and password reset are all performed via
+    the Cognito SDK — there are no `/auth/*` endpoints on this server.
 
 servers:
   - url: http://localhost:4000
@@ -14,22 +22,18 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: |
+        Cognito access token obtained via Amplify.Auth.signIn() / fetchAuthSession().
+        Issued by the tenant-specific Cognito User Pool (RS256, verified via JWKS).
 
   schemas:
     User:
       type: object
       properties:
-        id:        { type: string, format: uuid }
-        email:     { type: string, format: email }
-        name:      { type: string }
+        id:        { type: string, description: Cognito sub (UUID) }
         role:      { type: string, enum: [admin, user] }
+        tenantId:  { type: string }
         createdAt: { type: string, format: date-time }
-
-    AuthTokens:
-      type: object
-      properties:
-        accessToken:  { type: string }
-        refreshToken: { type: string }
 
     Error:
       type: object
@@ -55,59 +59,12 @@ paths:
                 properties:
                   status: { type: string, example: ok }
 
-  /auth/signup:
-    post:
-      summary: Register a new user
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, password, name]
-              properties:
-                email:    { type: string, format: email }
-                password: { type: string, minLength: 8 }
-                name:     { type: string }
-      responses:
-        "201":
-          description: User created
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AuthTokens" }
-        "409":
-          description: Email already in use
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /auth/login:
-    post:
-      summary: Login with email and password
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, password]
-              properties:
-                email:    { type: string, format: email }
-                password: { type: string }
-      responses:
-        "200":
-          description: Authenticated
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AuthTokens" }
-        "401":
-          description: Invalid credentials
-
   /users/me:
     get:
       summary: Get current user profile
+      description: |
+        Returns the DynamoDB profile for the authenticated Cognito user.
+        A minimal profile is created automatically on first call (lazy provisioning).
       responses:
         "200":
           description: Current user
@@ -115,4 +72,8 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/User" }
         "401":
-          description: Unauthorized
+          description: Missing or invalid Cognito access token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+

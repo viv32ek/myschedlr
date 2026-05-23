@@ -16,6 +16,44 @@ Future<void> main() async {
   runApp(const MySchedlrApp());
 }
 
+Future<void> _configureAmplify() async {
+  try {
+    await Amplify.addPlugin(AmplifyAuthCognito());
+    await Amplify.configure(buildAmplifyConfig());
+  } on AmplifyAlreadyConfiguredException {
+    // Thrown during hot-reload — safe to ignore.
+  }
+}
+
+Future<bool> _isSignedIn() async {
+  try {
+    final session = await Amplify.Auth.fetchAuthSession();
+    return session.isSignedIn;
+  } catch (_) {
+    return false;
+  }
+}
+
+final _router = GoRouter(
+  initialLocation: '/login',
+  redirect: (BuildContext context, GoRouterState state) async {
+    final signedIn = await _isSignedIn();
+    final loc = state.matchedLocation;
+    final goingToAuth = loc == '/login' || loc == '/signup';
+
+    if (!signedIn && !goingToAuth) return '/login';
+    if (signedIn && goingToAuth) return '/home';
+    return null;
+  },
+  routes: [
+    GoRoute(path: '/login',  builder: (_, __) => const LoginScreen()),
+    GoRoute(path: '/signup', builder: (_, __) => const SignupScreen()),
+    GoRoute(path: '/home',   builder: (_, __) => const HomeScreen()),
+    // /profile is reserved for v2 — redirect to /home until implemented
+    GoRoute(path: '/profile', redirect: (_, __) async => '/home'),
+  ],
+);
+
 class MySchedlrApp extends StatelessWidget {
   const MySchedlrApp({super.key});
 

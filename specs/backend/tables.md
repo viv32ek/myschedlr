@@ -46,11 +46,10 @@ All entity IDs are generated with `nanoid(12)` (URL-safe alphabet, ~71 bits of e
 |-----------|------|-------|
 | `pk` | String | `USER#{email}` |
 | `sk` | String | `#METADATA` |
-| `id` | String (`usr_*`) | Stable user ID, referenced across all tables |
+| `id` | String (`usr_*`) | Maps to Cognito `sub` — used in JWT resolution via `id-index` |
 | `email` | String | Unique within tenant |
 | `name` | String | Display name |
 | `roles` | String Set | One or more of: `admin`, `faculty`, `student` — stored as a DynamoDB SS (String Set) |
-| `passwordHash` | String | bcrypt hash — never returned in API responses |
 | `createdAt` | String (ISO-8601) | |
 | `tenantId` | String | Denormalized for safety |
 

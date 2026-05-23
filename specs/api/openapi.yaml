@@ -2,7 +2,20 @@ openapi: 3.1.0
 info:
   title: MySchedlr API
   version: 1.0.0
-  description: API contract for MySchedlr — update this spec before implementing endpoints.
+  description: |
+    API contract for MySchedlr — update this spec before implementing endpoints.
+
+    ## Authentication
+    Authentication is handled by **AWS Cognito**. The backend does NOT
+    implement signup or login — clients use the Cognito SDK (Amplify) directly.
+
+    The backend receives a Cognito-issued JWT as a Bearer token, verifies it
+    against the Cognito JWKS endpoint, and reads the `sub` claim to resolve
+    the user profile from DynamoDB.
+
+    The only backend auth endpoint is `POST /auth/provision`, called once
+    after a user's first successful Cognito login to create their DynamoDB
+    profile (roles, tenantId, name).
 
 servers:
   - url: http://localhost:4000
@@ -13,13 +26,13 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: JWT (Cognito)
 
   schemas:
     User:
       type: object
       properties:
-        id:        { type: string, format: uuid }
+        id:        { type: string, description: "Cognito sub — also stored as usr_* in DynamoDB" }
         email:     { type: string, format: email }
         name:      { type: string }
         roles:
@@ -30,12 +43,6 @@ components:
           minItems: 1
           description: A user may hold multiple roles simultaneously
         createdAt: { type: string, format: date-time }
-
-    AuthTokens:
-      type: object
-      properties:
-        accessToken:  { type: string }
-        refreshToken: { type: string }
 
     Error:
       type: object
@@ -61,21 +68,23 @@ paths:
                 properties:
                   status: { type: string, example: ok }
 
-  /auth/signup:
+  /auth/provision:
     post:
-      summary: Register a new user
-      security: []
+      summary: Create DynamoDB profile after first Cognito login
+      description: |
+        Called by the client immediately after a user's first successful
+        Cognito authentication. Creates the user's profile record in DynamoDB
+        (name, roles, tenantId). Idempotent — safe to call on every login;
+        does nothing if the profile already exists.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [email, password, name]
+              required: [name]
               properties:
-                email:    { type: string, format: email }
-                password: { type: string, minLength: 8 }
-                name:     { type: string }
+                name:  { type: string }
                 roles:
                   type: array
                   items: { type: string, enum: [admin, faculty, student] }
@@ -83,38 +92,17 @@ paths:
                   default: [student]
       responses:
         "201":
-          description: User created
+          description: Profile created
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthTokens" }
-        "409":
-          description: Email already in use
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /auth/login:
-    post:
-      summary: Login with email and password
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, password]
-              properties:
-                email:    { type: string, format: email }
-                password: { type: string }
-      responses:
+              schema: { $ref: "#/components/schemas/User" }
         "200":
-          description: Authenticated
+          description: Profile already exists (idempotent)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthTokens" }
+              schema: { $ref: "#/components/schemas/User" }
         "401":
-          description: Invalid credentials
+          description: Unauthorized
 
   /users/me:
     get:

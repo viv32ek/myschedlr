@@ -130,6 +130,8 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 
 ## Table: `myschedlr-{tenantId}-org`
 > TBD — will cover schools, student groups, group memberships, faculty assignments, and tenant config.
+> **Config items** are already defined below (in the Configuration section) and will live in this table:
+> `TENANT/CONFIG`, `COURSE#{id}/CONFIG`, `BATCH#{id}/CONFIG`.
 
 ---
 
@@ -177,11 +179,13 @@ Later in the chain takes precedence. Overrides are **partial maps** — only key
 | `testsEnabled` | bool | `true` | Enables test scheduling in a batch |
 
 #### Storage — tenant defaults
-Stored as a special item in the `myschedlr-{tenantId}-org` table.
+All config items live in the `myschedlr-{tenantId}-org` table.
 
 | pk | sk | Purpose |
 |----|----|---------|
 | `TENANT` | `CONFIG` | Tenant-level feature flag defaults |
+| `COURSE#{courseId}` | `CONFIG` | Course-level overrides |
+| `BATCH#{batchId}` | `CONFIG` | Batch-level overrides |
 
 Item attributes:
 | Attribute | Type | Notes |
@@ -197,47 +201,64 @@ Item attributes:
 | `updatedBy` | String (`usr_*`) | Super admin who last changed this |
 
 #### Storage — course-level overrides
-Stored as a `featureOverrides` map attribute on the Course item in the `catalog` table.
+Stored as a dedicated config item in the `myschedlr-{tenantId}-org` table (not on the Course item itself).
 
-```json
-// On COURSE#{id} / #METADATA item — partial map, only overridden keys present
-"featureOverrides": {
-  "chaptersEnabled": false,
-  "unitsEnabled": false
-}
-```
+| pk | sk | Purpose |
+|----|----|---------|
+| `COURSE#{courseId}` | `CONFIG` | Course-level feature flag overrides |
+
+Item attributes:
+| Attribute | Type | Notes |
+|-----------|------|-------|
+| `pk` | String | `COURSE#{courseId}` |
+| `sk` | String | `CONFIG` |
+| `chaptersEnabled` | Boolean | Present only if overriding tenant default |
+| `unitsEnabled` | Boolean | Present only if overriding tenant default |
+| `updatedAt` | String | |
+| `updatedBy` | String (`usr_*`) | Admin who last changed this |
 
 Overridable flags at course level: `chaptersEnabled`, `unitsEnabled`.
 
 #### Storage — batch-level overrides
-Stored as a `featureOverrides` map attribute on the Batch item in the `batches` table.
+Stored as a dedicated config item in the `myschedlr-{tenantId}-org` table (not on the Batch item itself).
 
-```json
-// On BATCH#{id} / #METADATA item — partial map, only overridden keys present
-"featureOverrides": {
-  "attendanceEnabled": true,
-  "chapterLoggingEnabled": true,
-  "testsEnabled": false
-}
-```
+| pk | sk | Purpose |
+|----|----|---------|
+| `BATCH#{batchId}` | `CONFIG` | Batch-level feature flag overrides |
+
+Item attributes:
+| Attribute | Type | Notes |
+|-----------|------|-------|
+| `pk` | String | `BATCH#{batchId}` |
+| `sk` | String | `CONFIG` |
+| `attendanceEnabled` | Boolean | Present only if overriding |
+| `chapterLoggingEnabled` | Boolean | Present only if overriding |
+| `testsEnabled` | Boolean | Present only if overriding |
+| `updatedAt` | String | |
+| `updatedBy` | String (`usr_*`) | Admin who last changed this |
 
 Overridable flags at batch level: `attendanceEnabled`, `chapterLoggingEnabled`, `testsEnabled`.
 
 #### Config resolution — backend service helper
 ```js
-// Returns the effective FeatureFlags for a given batch context
+// Returns the effective FeatureFlags for a given batch context.
+// All three config items are in the org table — 3 GetItems from one table.
 async function resolveFeatures(tenantId, courseId, batchId) {
   const defaults = { chaptersEnabled: true, unitsEnabled: true,
                      attendanceEnabled: true, chapterLoggingEnabled: false, testsEnabled: true };
-  const tenantCfg  = await getTenantConfig(tenantId);        // TENANT / CONFIG item
-  const courseItem = await getCourse(tenantId, courseId);    // featureOverrides map or {}
-  const batchItem  = await getBatch(tenantId, batchId);      // featureOverrides map or {}
+
+  // All reads from myschedlr-{tenantId}-org
+  const [tenantCfg, courseCfg, batchCfg] = await Promise.all([
+    getOrgItem(tenantId, 'TENANT',           'CONFIG'),   // tenant defaults
+    getOrgItem(tenantId, `COURSE#${courseId}`, 'CONFIG'), // course overrides (may not exist)
+    getOrgItem(tenantId, `BATCH#${batchId}`,  'CONFIG'),  // batch overrides (may not exist)
+  ]);
 
   const merged = {
     ...defaults,
-    ...tenantCfg,
-    ...(courseItem.featureOverrides ?? {}),
-    ...(batchItem.featureOverrides  ?? {}),
+    ...(tenantCfg  ?? {}),
+    ...(courseCfg  ?? {}),
+    ...(batchCfg   ?? {}),
   };
 
   // Implicit dependency: units require chapters

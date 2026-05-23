@@ -10,6 +10,8 @@ MySchedlr is a multi-tenant SaaS platform for education organizations. It lets a
 - [ ] Support multi-school orgs where the same course catalog can be reused across schools
 
 ## Users & Roles
+A user can hold **multiple roles simultaneously** (e.g. a person who is both an admin and a faculty member).
+
 | Role | Description |
 |------|-------------|
 | `admin` | Org-level admin — manages schools, courses, batches, faculty, billing |
@@ -62,7 +64,7 @@ Full storage schema lives in `specs/backend/tables.md` under the **Configuration
 > High-level entities — DynamoDB table schemas live in `specs/backend/tables.md`
 
 ### Identity
-- **User** – id, email, name, role (`admin` | `faculty` | `student`), createdAt
+- **User** – id, email, name, roles[] (`admin` | `faculty` | `student`, one or more), createdAt
 
 ### Course Catalog (templates — reusable across schools; full tree stored as blob per course)
 - **Course** – id, name, description, version, subjects[] (embedded tree), createdAt

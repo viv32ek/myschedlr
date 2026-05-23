@@ -49,7 +49,7 @@ All entity IDs are generated with `nanoid(12)` (URL-safe alphabet, ~71 bits of e
 | `id` | String (`usr_*`) | Stable user ID, referenced across all tables |
 | `email` | String | Unique within tenant |
 | `name` | String | Display name |
-| `role` | String | `admin` \| `faculty` \| `student` |
+| `roles` | String Set | One or more of: `admin`, `faculty`, `student` — stored as a DynamoDB SS (String Set) |
 | `passwordHash` | String | bcrypt hash — never returned in API responses |
 | `createdAt` | String (ISO-8601) | |
 | `tenantId` | String | Denormalized for safety |

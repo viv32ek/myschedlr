@@ -24,12 +24,39 @@ MySchedlr is a multi-tenant SaaS platform for education organizations. It lets a
 | Schools & student groups | P0 | planned |
 | Batch management (create batches, enroll students) | P0 | planned |
 | Class scheduling (schedule classes in a batch, assign faculty) | P0 | planned |
+| Two-tier configuration (deployment modules + tenant feature flags) | P0 | planned |
 | Test scheduling | P1 | planned |
 | Attendance tracking (per class, per student) | P1 | planned |
 | Faculty billing (auto-calculate from hours taught) | P1 | planned |
 | Admin billing (manual billing records for admin work) | P2 | planned |
 | Faculty scoping (tag faculty to school / course / subject) | P2 | planned |
 | Reports & dashboards | P3 | planned |
+
+## Configuration
+MySchedlr uses a two-tier configuration system.
+
+### Tier 1 — Deployment feature modules (ops-controlled)
+Set via environment variables on the ECS task at deploy time. Code gates entire feature surfaces — routing, models, and UI — behind these flags.
+
+| Env var | Values | Default | Controls |
+|---------|--------|---------|----------|
+| `FEATURE_CORE` | `true` \| `false` | `true` (always) | Catalog, schools, batches, scheduling |
+| `FEATURE_BILLING` | `true` \| `false` | `false` | Faculty + admin billing module |
+
+### Tier 2 — Tenant feature flags (super-admin-controlled)
+Fine-grained flags set by the org's super admin. Stored as tenant defaults and can be partially overridden at the course or batch level. Resolution order: **deployment → tenant defaults → course override → batch override** (later takes precedence).
+
+| Flag | Type | Tenant default | Overridable at |
+|------|------|----------------|----------------|
+| `chaptersEnabled` | bool | `true` | course, batch |
+| `unitsEnabled` | bool | `true` | course, batch |
+| `attendanceEnabled` | bool | `true` | batch |
+| `chapterLoggingEnabled` | bool | `false` | batch |
+| `testsEnabled` | bool | `true` | batch |
+
+> `unitsEnabled` requires `chaptersEnabled`. If `chaptersEnabled` is turned off, units are implicitly off too regardless of the `unitsEnabled` flag.
+
+Full storage schema lives in `specs/backend/tables.md` under the **Configuration** section.
 
 ## Data Models
 > High-level entities — DynamoDB table schemas live in `specs/backend/tables.md`

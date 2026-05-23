@@ -370,12 +370,113 @@ All mutations (add/edit/delete subject, chapter, or unit) follow this pattern:
 
 ---
 
+## Configuration
+
+### Tier 1 — Deployment feature modules
+Controlled via ECS environment variables. No database storage. The backend reads these at startup and gates entire feature surfaces (routes, models, middleware).
+
+| Env var | Default | Controls |
+|---------|---------|----------|
+| `FEATURE_CORE` | `true` | Catalog, schools, batches, scheduling (always on) |
+| `FEATURE_BILLING` | `false` | Faculty + admin billing module |
+
+### Tier 2 — Tenant feature flags
+Super admin sets tenant-level defaults. Courses and batches can partially override.
+
+#### Resolution order
+```
+deployment env  →  tenant defaults  →  course overrides  →  batch overrides
+```
+Later in the chain takes precedence. Overrides are **partial maps** — only keys present in the override are applied; missing keys fall back to the previous layer.
+
+#### Feature flags
+| Flag | Type | Tenant default | Notes |
+|------|------|----------------|-------|
+| `chaptersEnabled` | bool | `true` | Enables chapter-level grouping within subjects |
+| `unitsEnabled` | bool | `true` | Enables units within chapters; ignored if `chaptersEnabled` is false |
+| `attendanceEnabled` | bool | `true` | Enables per-class attendance tracking in a batch |
+| `chapterLoggingEnabled` | bool | `false` | Faculty can log which chapters were covered per class |
+| `testsEnabled` | bool | `true` | Enables test scheduling in a batch |
+
+#### Storage — tenant defaults
+Stored as a special item in the `myschedlr-{tenantId}-org` table.
+
+| pk | sk | Purpose |
+|----|----|---------|
+| `TENANT` | `CONFIG` | Tenant-level feature flag defaults |
+
+Item attributes:
+| Attribute | Type | Notes |
+|-----------|------|-------|
+| `pk` | String | `TENANT` |
+| `sk` | String | `CONFIG` |
+| `chaptersEnabled` | Boolean | |
+| `unitsEnabled` | Boolean | |
+| `attendanceEnabled` | Boolean | |
+| `chapterLoggingEnabled` | Boolean | |
+| `testsEnabled` | Boolean | |
+| `updatedAt` | String | |
+| `updatedBy` | String (`usr_*`) | Super admin who last changed this |
+
+#### Storage — course-level overrides
+Stored as a `featureOverrides` map attribute on the Course item in the `catalog` table.
+
+```json
+// On COURSE#{id} / #METADATA item — partial map, only overridden keys present
+"featureOverrides": {
+  "chaptersEnabled": false,
+  "unitsEnabled": false
+}
+```
+
+Overridable flags at course level: `chaptersEnabled`, `unitsEnabled`.
+
+#### Storage — batch-level overrides
+Stored as a `featureOverrides` map attribute on the Batch item in the `batches` table.
+
+```json
+// On BATCH#{id} / #METADATA item — partial map, only overridden keys present
+"featureOverrides": {
+  "attendanceEnabled": true,
+  "chapterLoggingEnabled": true,
+  "testsEnabled": false
+}
+```
+
+Overridable flags at batch level: `attendanceEnabled`, `chapterLoggingEnabled`, `testsEnabled`.
+
+#### Config resolution — backend service helper
+```js
+// Returns the effective FeatureFlags for a given batch context
+async function resolveFeatures(tenantId, courseId, batchId) {
+  const defaults = { chaptersEnabled: true, unitsEnabled: true,
+                     attendanceEnabled: true, chapterLoggingEnabled: false, testsEnabled: true };
+  const tenantCfg  = await getTenantConfig(tenantId);        // TENANT / CONFIG item
+  const courseItem = await getCourse(tenantId, courseId);    // featureOverrides map or {}
+  const batchItem  = await getBatch(tenantId, batchId);      // featureOverrides map or {}
+
+  const merged = {
+    ...defaults,
+    ...tenantCfg,
+    ...(courseItem.featureOverrides ?? {}),
+    ...(batchItem.featureOverrides  ?? {}),
+  };
+
+  // Implicit dependency: units require chapters
+  if (!merged.chaptersEnabled) merged.unitsEnabled = false;
+
+  return merged;
+}
+```
+
+---
+
 ## Naming Summary
 | Table (per tenant) | Purpose |
 |--------------------|---------|
 | `myschedlr-{tid}-users` | Identity — all roles |
 | `myschedlr-{tid}-catalog` | Courses with embedded subject/chapter/unit tree (blob per course) |
-| `myschedlr-{tid}-org` | Schools, student groups, faculty assignments |
+| `myschedlr-{tid}-org` | Schools, student groups, faculty assignments, tenant config |
 | `myschedlr-{tid}-batches` | Batches, enrolled students, classes, tests |
 | `myschedlr-{tid}-attendance` | Class attendance per student |
 | `myschedlr-{tid}-billing` | Billing records (faculty + admin) |

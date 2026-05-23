@@ -23,7 +23,7 @@ services:
   ui:
     build: ./ui
     ports:
-      - "3000:3000"
+      - "3001:80"
     env_file: ./ui/.env
     volumes:
       - ./ui:/app
